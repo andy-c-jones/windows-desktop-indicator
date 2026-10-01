@@ -13,5 +13,12 @@ message and every pull request title must follow it; the `Conventional commits` 
 - Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
 - Use the imperative mood, lower-case description, no trailing full stop, e.g. `fix: hide indicator behind full-screen apps`.
 - Mark breaking changes with `!` after the type/scope and a `BREAKING CHANGE:` footer.
-- Name branches with a matching prefix (`feat/…`, `fix/…`, `docs/…`, `ci/…`) so the labeler can categorise release notes.
+- Name branches with a matching prefix (`feat/…`, `fix/…`, `docs/…`, `ci/…`) so the labeler can categorise the PR.
 - `main` is protected: changes go through a pull request, never a direct push.
+
+## Releases
+
+Releases are automated by release-please (`.github/workflows/release.yml`, `release-please-config.json`) and only
+happen from `main`. Never bump `version` in `Cargo.toml`, edit `CHANGELOG.md`/`.release-please-manifest.json`, or push
+`v*` tags by hand. The commit type drives the version: `fix:` → patch, `feat:` → minor, `!`/`BREAKING CHANGE:` → major.
+To release, merge the open `chore(main): release x.y.z` PR.

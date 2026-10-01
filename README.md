@@ -46,16 +46,13 @@ cargo build --release
 
 - **CI** (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `clippy -D warnings` and the tests on every push and PR,
   then builds x64 and arm64 executables as workflow artifacts.
-- **Labeler** (`.github/labeler.yml`) labels PRs by changed files and branch prefix (`feat/…`, `fix/…`);
-  these labels group the auto-generated release notes (`.github/release.yml`). Add `skip-changelog` to omit a PR.
-- **Release**: bump `version` in `Cargo.toml`, commit, then push a matching tag. The release workflow verifies the
-  tag, runs CI, and publishes a GitHub release with both exes, checksums and generated notes
-  (tags containing `-`, e.g. `v0.2.0-beta.1`, are marked pre-release).
-
-  ```powershell
-  git tag v0.1.0
-  git push origin v0.1.0
-  ```
+- **Labeler** (`.github/labeler.yml`) labels PRs by changed files and branch prefix (`feat/…`, `fix/…`).
+- **Release** is automated with [release-please](https://github.com/googleapis/release-please) and only runs on `main`
+  (`.github/workflows/release.yml`). On every push to `main` it keeps a release PR (`chore(main): release x.y.z`) open
+  that bumps the version in `Cargo.toml`/`Cargo.lock` and updates `CHANGELOG.md` from the Conventional Commit messages
+  since the last release: `fix:` → patch, `feat:` → minor, `!`/`BREAKING CHANGE:` → major.
+  Merging that PR tags `main` (`vX.Y.Z`), creates the GitHub release, runs CI and attaches both exes and checksums.
+  Don't bump the version or push tags by hand. To force a specific version, add a `Release-As: 1.2.3` footer to a commit.
 
 ## Contributing
 
@@ -71,7 +68,8 @@ fix(render): clip highlight glow on high DPI
 ```
 
 Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
-Merge commits are exempt. Use a matching branch prefix (`feat/…`, `fix/…`) so the PR is labelled for the release notes.
+Merge commits are exempt. Use a matching branch prefix (`feat/…`, `fix/…`) so the PR is labelled.
+The commit type decides the next release version and changelog entry (see *Release* above).
 
 ## How it works
 
