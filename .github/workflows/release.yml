@@ -1,32 +1,44 @@
 name: Release
 
+# Runs only for commits on main. release-please keeps a release PR open that bumps the version in
+# Cargo.toml/Cargo.lock and updates CHANGELOG.md from Conventional Commit messages; merging that PR
+# tags main and creates the GitHub release, after which the executables are built and attached.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  verify-version:
-    name: Verify tag matches Cargo.toml
-    runs-on: windows-latest
+  release-please:
+    name: Release PR / tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v4
-      - shell: pwsh
-        run: |
-          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          if ("v$version" -ne "${{ github.ref_name }}") {
-            throw "Tag ${{ github.ref_name }} does not match Cargo.toml version $version"
-          }
+      - id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   ci:
-    needs: verify-version
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
     uses: ./.github/workflows/ci.yml
 
   publish:
-    name: Publish GitHub release
-    needs: ci
+    name: Attach executables
+    needs: [release-please, ci]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -39,13 +51,7 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: sha256sum *.exe > SHA256SUMS.txt && cat SHA256SUMS.txt
-      - name: Create release
+      - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          prerelease=""
-          if [[ "${{ github.ref_name }}" == *-* ]]; then prerelease="--prerelease"; fi
-          gh release create "${{ github.ref_name }}" dist/* \
-            --repo "${{ github.repository }}" \
-            --title "Desktop Indicator ${{ github.ref_name }}" \
-            --generate-notes --verify-tag $prerelease
+        run: gh release upload "${{ needs.release-please.outputs.tag }}" dist/* --repo "${{ github.repository }}" --clobber
