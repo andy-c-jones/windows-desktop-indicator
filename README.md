@@ -57,6 +57,22 @@ cargo build --release
   git push origin v0.1.0
   ```
 
+## Contributing
+
+`main` is protected, so all changes go through a pull request. Commit messages and PR titles must follow
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/), and the `Conventional commits` workflow
+(`.github/workflows/conventional-commits.yml`) fails PRs that don't:
+
+```
+<type>(<optional scope>)!: <description>
+
+feat: add per-monitor placement
+fix(render): clip highlight glow on high DPI
+```
+
+Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+Merge commits are exempt. Use a matching branch prefix (`feat/…`, `fix/…`) so the PR is labelled for the release notes.
+
 ## How it works
 
 | Feature | Mechanism |
