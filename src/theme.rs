@@ -32,6 +32,14 @@ pub struct Theme {
     pub dot: Rgba,
     /// Approximates the taskbar background; used to outline the notification dot.
     pub ring: Rgba,
+    /// Fluent "elevation" border on idle cells, fading from top to bottom.
+    pub stroke_top: Rgba,
+    pub stroke_bottom: Rgba,
+    /// Elevation border on the current (accent) cell.
+    pub accent_stroke_top: Rgba,
+    pub accent_stroke_bottom: Rgba,
+    /// Soft halo around the current cell.
+    pub glow: Rgba,
     /// Null-terminated UTF-16 face name.
     pub font: [u16; FONT_LEN],
 }
@@ -183,6 +191,24 @@ fn system_font() -> [u16; FONT_LEN] {
     face
 }
 
+/// A halo only flatters saturated accents; neutral (e.g. grey) accents get none.
+pub fn accent_glow(current: Rgba, light: bool) -> Rgba {
+    let mx = current.0.max(current.1).max(current.2);
+    let mn = current.0.min(current.1).min(current.2);
+    let sat = if mx == 0 {
+        0.0
+    } else {
+        (mx - mn) as f32 / mx as f32
+    };
+    let strength = ((sat - 0.15) / 0.5).clamp(0.0, 1.0);
+    Rgba(
+        current.0,
+        current.1,
+        current.2,
+        strength * if light { 0.22 } else { 0.32 },
+    )
+}
+
 impl Theme {
     pub fn load() -> Self {
         let font = system_font();
@@ -199,6 +225,11 @@ impl Theme {
                 text: sys(COLOR_BTNTEXT),
                 dot: current,
                 ring: sys(COLOR_WINDOW),
+                stroke_top: sys(COLOR_BTNTEXT),
+                stroke_bottom: sys(COLOR_BTNTEXT),
+                accent_stroke_top: sys(COLOR_HIGHLIGHTTEXT),
+                accent_stroke_bottom: sys(COLOR_HIGHLIGHTTEXT),
+                glow: Rgba(0, 0, 0, 0.0),
                 font,
             };
         }
@@ -208,13 +239,22 @@ impl Theme {
         let accent_taskbar = !light && read_dword(PERSONALIZE, "ColorPrevalence").unwrap_or(0) != 0;
         // Windows 11 uses Light2 for accent fills in dark mode and Dark1 in light mode.
         let current = rgb(if light { pal[4] } else { pal[1] });
-        let (text, idle, hover) = if light {
-            (Rgba(0, 0, 0, 0.9), Rgba(0, 0, 0, 0.06), Rgba(0, 0, 0, 0.12))
+        // Values follow the WinUI Fluent control fill / elevation border tokens.
+        let (text, idle, hover, stroke_top, stroke_bottom) = if light {
+            (
+                Rgba(0, 0, 0, 0.9),
+                Rgba(255, 255, 255, 0.55),
+                Rgba(255, 255, 255, 0.85),
+                Rgba(0, 0, 0, 0.06),
+                Rgba(0, 0, 0, 0.14),
+            )
         } else {
             (
                 Rgba(255, 255, 255, 0.92),
-                Rgba(255, 255, 255, 0.08),
-                Rgba(255, 255, 255, 0.16),
+                Rgba(255, 255, 255, 0.055),
+                Rgba(255, 255, 255, 0.10),
+                Rgba(255, 255, 255, 0.10),
+                Rgba(255, 255, 255, 0.04),
             )
         };
         let ring = if accent_taskbar {
@@ -234,6 +274,12 @@ impl Theme {
             // Matches the Windows 11 taskbar "needs attention" highlight.
             dot: Rgba(0xF7, 0x63, 0x0C, 1.0),
             ring,
+            stroke_top,
+            stroke_bottom,
+            accent_stroke_top: Rgba(255, 255, 255, 0.10),
+            accent_stroke_bottom: Rgba(0, 0, 0, 0.16),
+            glow: accent_glow(current, light),
+
             font,
         }
     }

@@ -44,6 +44,9 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 type WndProcFn = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
 const TIMER_TICK: usize = 1;
 const TICK_MS: u32 = 200;
+const TIMER_ANIM: usize = 2;
+const ANIM_FRAME_MS: u32 = 15;
+const ANIM_DURATION: f32 = 0.22;
 
 const HSHELL_WINDOWDESTROYED: usize = 2;
 const HSHELL_WINDOWACTIVATED: usize = 4;
@@ -70,6 +73,8 @@ struct View {
     pad: i32,
     /// Cells stack top-to-bottom on left/right docked taskbars.
     vertical: bool,
+    /// Highlight position in cells; fractional while sliding between desktops.
+    highlight: f32,
     scale: f32,
     current: usize,
     dots: Vec<bool>,
@@ -117,6 +122,7 @@ struct App {
     settings: Settings,
     desktops: Desktops,
     flashing: Vec<isize>,
+    anim: Slide,
     tray_icon: HICON,
     tray_key: Option<(usize, usize, Theme)>,
     shell_msg: u32,
@@ -227,6 +233,7 @@ impl App {
             gap: 0,
             pad: 0,
             vertical: false,
+            highlight: self.anim.pos(),
             scale: 1.0,
             current: self.desktops.current,
             dots: dots.to_vec(),
@@ -284,46 +291,73 @@ impl App {
     }
 
     fn draw(&self, bar: HWND, v: &View) {
+        let c = render_view(v, self.settings.show_dots);
+        present(bar, &c, v.x, v.y);
+    }
+}
+
+fn render_view(v: &View, show_dots: bool) -> Canvas {
+    {
         let s = v.scale;
         let n = v.dots.len();
         let mut c = Canvas::new(v.w, v.h);
         let t = &v.theme;
+        let radius = 4.0 * s; // Fluent ControlCornerRadius
+        let f = |r: &RECT| (r.left as f32, r.top as f32, r.right as f32, r.bottom as f32);
 
         let mut labels = Vec::with_capacity(n);
         let mut rects = Vec::with_capacity(n);
         for i in 0..n {
             let rect = v.cell_rect(i);
-            let fill = if i == v.current {
-                t.current
-            } else if v.hover == Some(i) {
-                t.hover
-            } else {
-                t.idle
-            };
-            c.round_rect(
-                rect.left as f32,
-                rect.top as f32,
-                rect.right as f32,
-                rect.bottom as f32,
-                5.0 * s,
-                fill,
+            let (x0, y0, x1, y1) = f(&rect);
+            let fill = if v.hover == Some(i) { t.hover } else { t.idle };
+            c.round_rect(x0, y0, x1, y1, radius, fill);
+            c.round_rect_stroke(
+                x0,
+                y0,
+                x1,
+                y1,
+                radius,
+                s.max(1.0),
+                t.stroke_top,
+                t.stroke_bottom,
             );
             labels.push((rect, (i + 1).to_string()));
             rects.push(rect);
         }
+
+        // Accent highlight, positioned fractionally so it can slide between cells.
+        let off = v.highlight * (v.cell + v.gap) as f32;
+        let (hx0, hy0) = if v.vertical {
+            (v.pad as f32, v.pad as f32 + off)
+        } else {
+            (v.pad as f32 + off, v.pad as f32)
+        };
+        let (hx1, hy1) = (hx0 + v.cell as f32, hy0 + v.cell as f32);
+        c.round_rect_glow(hx0, hy0, hx1, hy1, radius, 3.0 * s, t.glow);
+        c.round_rect(hx0, hy0, hx1, hy1, radius, t.current);
+        c.round_rect_stroke(
+            hx0,
+            hy0,
+            hx1,
+            hy1,
+            radius,
+            s.max(1.0),
+            t.accent_stroke_top,
+            t.accent_stroke_bottom,
+        );
+        let hl = RECT {
+            left: hx0.round() as i32,
+            top: hy0.round() as i32,
+            right: hx1.round() as i32,
+            bottom: hy1.round() as i32,
+        };
+
         let mask = render::text_mask(v.w, v.h, (12.0 * s).round() as i32, &t.font, &labels);
-        for (i, r) in rects.iter().enumerate() {
-            c.mask(
-                &mask,
-                r,
-                if i == v.current {
-                    t.current_text
-                } else {
-                    t.text
-                },
-            );
+        for r in &rects {
+            c.mask_split(&mask, r, &hl, t.current_text, t.text);
         }
-        if self.settings.show_dots {
+        if show_dots {
             for (i, r) in rects.iter().enumerate() {
                 if v.dots[i] && i != v.current {
                     let (cx, cy) = (r.right as f32 - 4.0 * s, r.top as f32 + 4.0 * s);
@@ -332,7 +366,28 @@ impl App {
                 }
             }
         }
-        present(bar, &c, v.x, v.y);
+        c
+    }
+}
+
+impl App {
+    /// Advances the slide animation by one frame, redrawing only the highlight position.
+    fn animate(&mut self) {
+        let pos = self.anim.pos();
+        for i in 0..self.bars.len() {
+            if let Some(mut v) = self.bars[i].view.take() {
+                v.highlight = pos;
+                if v.visible {
+                    self.draw(self.bars[i].hwnd, &v);
+                }
+                self.bars[i].view = Some(v);
+            }
+        }
+        if self.anim.done() {
+            unsafe {
+                let _ = KillTimer(Some(self.ctl), TIMER_ANIM);
+            }
+        }
     }
 
     fn invalidate(&mut self) {
@@ -368,6 +423,9 @@ impl App {
             }
         }
         self.desktops = Desktops::read();
+        if self.anim.retarget(self.desktops.current) {
+            unsafe { SetTimer(Some(self.ctl), TIMER_ANIM, ANIM_FRAME_MS, None) };
+        }
         self.flashing
             .retain(|&h| unsafe { IsWindow(Some(HWND(h as _))) }.as_bool());
         let dots = self.compute_dots();
@@ -618,6 +676,10 @@ fn show_menu() {
 
 unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
+        WM_TIMER if wp.0 == TIMER_ANIM => {
+            with_app(|a| a.animate());
+            LRESULT(0)
+        }
         WM_TIMER if wp.0 == TIMER_TICK => {
             with_app(|a| a.tick());
             LRESULT(0)
@@ -799,6 +861,7 @@ fn main() {
                 settings: Settings::load(),
                 desktops: Desktops::read(),
                 flashing: Vec::new(),
+                anim: Slide::default(),
                 tray_icon: HICON::default(),
                 tray_key: None,
                 shell_msg: RegisterWindowMessageW(w!("SHELLHOOK")),
@@ -813,6 +876,59 @@ fn main() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+}
+
+/// Eased slide of the current-desktop highlight between cells.
+struct Slide {
+    from: f32,
+    to: usize,
+    start: Option<std::time::Instant>,
+}
+
+impl Default for Slide {
+    fn default() -> Self {
+        Slide {
+            from: f32::NAN,
+            to: 0,
+            start: None,
+        }
+    }
+}
+
+impl Slide {
+    fn progress(&self) -> f32 {
+        self.start.map_or(1.0, |s| {
+            (s.elapsed().as_secs_f32() / ANIM_DURATION).min(1.0)
+        })
+    }
+
+    fn pos(&self) -> f32 {
+        if self.from.is_nan() {
+            return self.to as f32;
+        }
+        let ease = 1.0 - (1.0 - self.progress()).powi(3); // ease-out cubic
+        self.from + (self.to as f32 - self.from) * ease
+    }
+
+    fn done(&self) -> bool {
+        self.progress() >= 1.0
+    }
+
+    /// Points the slide at `to`; returns true when a new animation started.
+    fn retarget(&mut self, to: usize) -> bool {
+        if self.from.is_nan() {
+            self.to = to;
+            self.from = to as f32;
+            return false;
+        }
+        if to == self.to {
+            return false;
+        }
+        self.from = self.pos();
+        self.to = to;
+        self.start = Some(std::time::Instant::now());
+        true
     }
 }
 
@@ -831,6 +947,7 @@ mod tests {
             gap: 4,
             pad: 4,
             vertical,
+            highlight: 0.0,
             scale: 1.0,
             current: 0,
             dots: vec![false; 3],
@@ -856,5 +973,82 @@ mod tests {
         assert_eq!(v.cell_rect(2).left, 4);
         assert_eq!(v.hit(10, 55), Some(2));
         assert_eq!(v.hit(55, 10), None);
+    }
+
+    /// Renders sample states over a taskbar-coloured background:
+    /// `cargo test --release preview -- --ignored` writes `%TEMP%\desktop-indicator-preview.bmp`.
+    #[test]
+    #[ignore]
+    fn preview() {
+        let s = 2.0;
+        let mk = |highlight: f32, hover: Option<usize>, dots: Vec<bool>| View {
+            visible: true,
+            x: 0,
+            y: 0,
+            w: (4.0 * s) as i32 * 2 + 3 * (26.0 * s) as i32 + 2 * (4.0 * s) as i32,
+            h: (26.0 * s) as i32 + (4.0 * s) as i32 * 2,
+            cell: (26.0 * s) as i32,
+            gap: (4.0 * s) as i32,
+            pad: (4.0 * s) as i32,
+            vertical: false,
+            highlight,
+            scale: s,
+            current: highlight.round() as usize,
+            dots,
+            hover,
+            theme: Theme::load(),
+        };
+        let states = [
+            mk(0.0, None, vec![false; 3]),
+            mk(0.5, None, vec![false; 3]),
+            mk(0.0, Some(1), vec![false, false, true]),
+            {
+                // Same states with a saturated (default blue) accent for comparison.
+                let mut v = mk(1.0, None, vec![true, false, false]);
+                v.theme.current = render::Rgba(0x99, 0xEB, 0xFF, 1.0);
+                v.theme.glow = theme::accent_glow(v.theme.current, false);
+                v
+            },
+        ];
+        let (w, h) = (states[0].w, states[0].h);
+        let rows = states.len() as i32;
+        let bg = [0x1C_u8, 0x20, 0x28];
+        let mut out = vec![0u8; (w * h * rows * 3) as usize];
+        for (row, v) in states.iter().enumerate() {
+            let c = render_view(v, true);
+            for y in 0..h {
+                for x in 0..w {
+                    let p = c.px[(y * w + x) as usize];
+                    let px = |i: usize, b: u8| {
+                        ((p[i] + (1.0 - p[3]) * b as f32 / 255.0) * 255.0).round() as u8
+                    };
+                    let (r, g, b) = (px(0, bg[0]), px(1, bg[1]), px(2, bg[2]));
+                    // Bottom-up BMP rows.
+                    let yy = rows * h - 1 - (row as i32 * h + y);
+                    let o = ((yy * w + x) * 3) as usize;
+                    out[o..o + 3].copy_from_slice(&[b, g, r]);
+                }
+            }
+        }
+        let stride = (w * 3 + 3) & !3;
+        let mut bmp = Vec::new();
+        let size = 54 + stride * h * rows;
+        bmp.extend_from_slice(b"BM");
+        for v in [size as u32, 0, 54, 40, w as u32, (h * rows) as u32] {
+            bmp.extend_from_slice(&v.to_le_bytes());
+        }
+        bmp.extend_from_slice(&1u16.to_le_bytes());
+        bmp.extend_from_slice(&24u16.to_le_bytes());
+        bmp.extend_from_slice(&[0u8; 24]);
+        for y in 0..h * rows {
+            let row = &out[(y * w * 3) as usize..((y + 1) * w * 3) as usize];
+            bmp.extend_from_slice(row);
+            bmp.extend(std::iter::repeat_n(0, (stride - w * 3) as usize));
+        }
+        std::fs::write(
+            std::env::temp_dir().join("desktop-indicator-preview.bmp"),
+            bmp,
+        )
+        .unwrap();
     }
 }

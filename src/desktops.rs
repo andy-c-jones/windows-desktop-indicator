@@ -19,9 +19,7 @@ pub struct Desktops {
 const VD_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops";
 
 fn split_ids(raw: &[u8]) -> Vec<DesktopId> {
-    raw.chunks_exact(16)
-        .map(|c| c.try_into().unwrap())
-        .collect()
+    raw.as_chunks::<16>().0.to_vec()
 }
 
 fn current_id() -> Option<DesktopId> {

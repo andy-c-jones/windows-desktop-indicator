@@ -20,6 +20,11 @@ pub struct Canvas {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Rgba(pub u8, pub u8, pub u8, pub f32);
 
+pub fn lerp(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Rgba(m(a.0, b.0), m(a.1, b.1), m(a.2, b.2), a.3 + (b.3 - a.3) * t)
+}
+
 impl Canvas {
     pub fn new(w: i32, h: i32) -> Self {
         Canvas {
@@ -43,18 +48,76 @@ impl Canvas {
     }
 
     pub fn round_rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, r: f32, c: Rgba) {
+        self.shade(x0, y0, x1, y1, r, 0.0, |d, _| (c, 0.5 - d));
+    }
+
+    /// Visits every pixel near a rounded rect with its signed distance `d` (negative inside) and
+    /// vertical position `t` (0 at top, 1 at bottom); `f` returns the colour and coverage to blend.
+    #[allow(clippy::too_many_arguments)]
+    fn shade(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        r: f32,
+        margin: f32,
+        f: impl Fn(f32, f32) -> (Rgba, f32),
+    ) {
         let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
         let (hw, hh) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
         let r = r.min(hw).min(hh);
-        for y in y0.floor() as i32..y1.ceil() as i32 {
-            for x in x0.floor() as i32..x1.ceil() as i32 {
+        for y in (y0 - margin).floor() as i32..(y1 + margin).ceil() as i32 {
+            for x in (x0 - margin).floor() as i32..(x1 + margin).ceil() as i32 {
                 let qx = ((x as f32 + 0.5) - cx).abs() - (hw - r);
                 let qy = ((y as f32 + 0.5) - cy).abs() - (hh - r);
                 let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
                 let d = outside + qx.max(qy).min(0.0) - r;
-                self.blend(x, y, c, 0.5 - d);
+                let t = (((y as f32 + 0.5) - y0) / (y1 - y0)).clamp(0.0, 1.0);
+                let (c, cov) = f(d, t);
+                self.blend(x, y, c, cov);
             }
         }
+    }
+
+    /// Inner 1-device-pixel-ish border whose colour fades from `top` to `bottom` (Fluent elevation stroke).
+    #[allow(clippy::too_many_arguments)]
+    pub fn round_rect_stroke(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        r: f32,
+        width: f32,
+        top: Rgba,
+        bottom: Rgba,
+    ) {
+        self.shade(x0, y0, x1, y1, r, 0.0, |d, t| {
+            let cov = (0.5 - d).clamp(0.0, 1.0) - (0.5 - (d + width)).clamp(0.0, 1.0);
+            (lerp(top, bottom, t), cov)
+        });
+    }
+
+    /// Soft halo outside a rounded rect, fading to nothing over `spread` pixels.
+    #[allow(clippy::too_many_arguments)]
+    pub fn round_rect_glow(
+        &mut self,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        r: f32,
+        spread: f32,
+        c: Rgba,
+    ) {
+        self.shade(x0, y0, x1, y1, r, spread, |d, _| {
+            if d <= 0.0 {
+                return (c, 0.0);
+            }
+            let f = 1.0 - (d / spread).clamp(0.0, 1.0);
+            (c, f * f)
+        });
     }
 
     pub fn circle(&mut self, cx: f32, cy: f32, r: f32, c: Rgba) {
@@ -63,11 +126,20 @@ impl Canvas {
 
     /// Composites `color` through an 8-bit coverage mask, limited to `clip`.
     pub fn mask(&mut self, mask: &[u8], clip: &RECT, c: Rgba) {
+        self.mask_split(mask, clip, &RECT::default(), c, c);
+    }
+
+    /// Like `mask`, but pixels inside `inside` use `c_in` and the rest `c_out` (text under a sliding highlight).
+    pub fn mask_split(&mut self, mask: &[u8], clip: &RECT, inside: &RECT, c_in: Rgba, c_out: Rgba) {
         for y in clip.top.max(0)..clip.bottom.min(self.h) {
             for x in clip.left.max(0)..clip.right.min(self.w) {
                 let m = mask[(y * self.w + x) as usize];
                 if m > 0 {
-                    self.blend(x, y, c, m as f32 / 255.0);
+                    let hit = x >= inside.left
+                        && x < inside.right
+                        && y >= inside.top
+                        && y < inside.bottom;
+                    self.blend(x, y, if hit { c_in } else { c_out }, m as f32 / 255.0);
                 }
             }
         }
