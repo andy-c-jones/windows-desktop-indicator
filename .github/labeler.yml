@@ -1,0 +1,28 @@
+# Labels applied to pull requests by .github/workflows/labeler.yml; they drive the release note
+# categories in .github/release.yml.
+
+feature:
+  - head-branch: ['^feat', '^feature', '^add']
+
+bug:
+  - head-branch: ['^fix', '^bug', '^hotfix']
+
+ui:
+  - changed-files:
+      - any-glob-to-any-file: ['src/render.rs', 'src/theme.rs']
+
+desktops:
+  - changed-files:
+      - any-glob-to-any-file: ['src/desktops.rs']
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file: ['Cargo.toml', 'Cargo.lock']
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file: ['**/*.md']
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: ['.github/**']

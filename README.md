@@ -2,7 +2,8 @@
 
 A tiny native (Rust, ~150 KB, no runtime) virtual desktop indicator that sits on the Windows 11 taskbar.
 
-- Shows a numbered pill per virtual desktop; the current one is filled with your accent colour.
+- Shows a numbered tile per virtual desktop in a Fluent style; the current one is filled with your accent colour
+  and slides smoothly when you switch.
 - **Click** a number to switch to that desktop; **scroll** over it to move left/right.
 - Optional **notification dot** on desktops where an app is requesting attention (flashing taskbar button).
 - Placement **Automatic**: left side when taskbar icons are centred, centre when icons are left-aligned
@@ -15,6 +16,17 @@ A tiny native (Rust, ~150 KB, no runtime) virtual desktop indicator that sits on
 
 Settings are in the tray icon menu (or right-click the indicator): notification dots, position, start with Windows, exit.
 
+## Download
+
+Grab the latest single-file exe from [Releases](https://github.com/andy-c-jones/windows-desktop-indicator/releases/latest):
+
+- [`desktop-indicator-x64.exe`](https://github.com/andy-c-jones/windows-desktop-indicator/releases/latest/download/desktop-indicator-x64.exe) — most PCs
+- [`desktop-indicator-arm64.exe`](https://github.com/andy-c-jones/windows-desktop-indicator/releases/latest/download/desktop-indicator-arm64.exe) — Windows on ARM (Snapdragon, etc.)
+
+Put it anywhere and run it; enable *Start with Windows* from the tray menu. `SHA256SUMS.txt` is attached to each release.
+The exe is not code-signed, so SmartScreen may warn on first run (*More info → Run anyway*), and Smart App Control,
+if enabled, may block it.
+
 ## Build
 
 Requires Rust (`winget install Rustlang.Rustup`) and the MSVC linker
@@ -24,6 +36,21 @@ Requires Rust (`winget install Rustlang.Rustup`) and the MSVC linker
 cargo build --release
 .\target\release\desktop-indicator.exe
 ```
+
+## CI and releases
+
+- **CI** (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `clippy -D warnings` and the tests on every push and PR,
+  then builds x64 and arm64 executables as workflow artifacts.
+- **Labeler** (`.github/labeler.yml`) labels PRs by changed files and branch prefix (`feat/…`, `fix/…`);
+  these labels group the auto-generated release notes (`.github/release.yml`). Add `skip-changelog` to omit a PR.
+- **Release**: bump `version` in `Cargo.toml`, commit, then push a matching tag. The release workflow verifies the
+  tag, runs CI, and publishes a GitHub release with both exes, checksums and generated notes
+  (tags containing `-`, e.g. `v0.2.0-beta.1`, are marked pre-release).
+
+  ```powershell
+  git tag v0.1.0
+  git push origin v0.1.0
+  ```
 
 ## How it works
 
