@@ -167,33 +167,41 @@ fn class_name(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n.max(0) as usize])
 }
 
-/// True when the foreground window covers the whole monitor the taskbar is on (games, video, presentations).
-fn fullscreen_app_active(tb: HWND) -> bool {
+/// True when `hwnd` is a visible app window covering the whole of monitor rect `m`.
+fn covers_monitor(hwnd: HWND, m: &RECT) -> bool {
     unsafe {
-        let fg = GetForegroundWindow();
-        if fg.is_invalid() || fg == tb {
+        if hwnd.is_invalid() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
             return false;
         }
         if matches!(
-            class_name(fg).as_str(),
+            class_name(hwnd).as_str(),
             "Progman"
                 | "WorkerW"
                 | "Shell_TrayWnd"
                 | "Shell_SecondaryTrayWnd"
                 | "Windows.UI.Core.CoreWindow"
                 | "XamlExplorerHostIslandWindow"
+                | "DesktopIndicatorBar"
         ) {
             return false;
         }
         let mut cloaked = 0u32;
-        let _ = DwmGetWindowAttribute(fg, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut _, 4);
-        if cloaked != 0 || !IsWindowVisible(fg).as_bool() {
+        let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut _, 4);
+        if cloaked != 0 {
             return false;
         }
         let mut r = RECT::default();
-        if GetWindowRect(fg, &mut r).is_err() {
+        if GetWindowRect(hwnd, &mut r).is_err() {
             return false;
         }
+        r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
+    }
+}
+
+/// True when a full-screen window (games, video, presentations) is on the taskbar's monitor,
+/// either as the foreground window or stacked above the taskbar on an unfocused monitor.
+fn fullscreen_app_active(tb: HWND) -> bool {
+    unsafe {
         let mut mi = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
@@ -202,7 +210,20 @@ fn fullscreen_app_active(tb: HWND) -> bool {
             return false;
         }
         let m = mi.rcMonitor;
-        r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom
+        let fg = GetForegroundWindow();
+        if fg != tb && covers_monitor(fg, &m) {
+            return true;
+        }
+        // Walk the z-order from the top down to the taskbar; anything above it that fills the
+        // monitor is hiding the taskbar, so the indicator must not be drawn over it either.
+        let mut h = GetTopWindow(None).ok();
+        while let Some(w) = h.filter(|w| !w.is_invalid() && *w != tb) {
+            if covers_monitor(w, &m) {
+                return true;
+            }
+            h = GetWindow(w, GW_HWNDNEXT).ok();
+        }
+        false
     }
 }
 
