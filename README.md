@@ -1,5 +1,10 @@
 # Desktop Indicator
 
+<img width="97" height="44" alt="image" src="https://github.com/user-attachments/assets/dc5b036c-3a60-41ee-a2b9-b77c7c09e48a" />
+
+<img width="263" height="174" alt="image" src="https://github.com/user-attachments/assets/1dc97821-97c8-4148-91be-37ec8542dfbf" />
+
+
 A tiny native (Rust, ~150 KB, no runtime) virtual desktop indicator that sits on the Windows 11 taskbar.
 
 - Shows a numbered tile per virtual desktop in a Fluent style; the current one is filled with your accent colour
