@@ -1,0 +1,45 @@
+name: Conventional commits
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check:
+    name: Conventional commits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR title and commit messages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ github.event.pull_request.title }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: [^ ].*'
+          failed=0
+
+          if [[ ! "$TITLE" =~ $pattern ]]; then
+            echo "::error title=PR title::'$TITLE' is not a Conventional Commit (e.g. 'fix: hide indicator behind full-screen apps')"
+            failed=1
+          fi
+
+          while IFS=$'\t' read -r sha subject; do
+            # Merge commits created by git or GitHub are allowed.
+            [[ "$subject" =~ ^Merge\  ]] && continue
+            if [[ ! "$subject" =~ $pattern ]]; then
+              echo "::error title=Commit ${sha:0:7}::'$subject' is not a Conventional Commit"
+              failed=1
+            fi
+          done < <(gh api "repos/$REPO/pulls/$PR/commits" --paginate \
+                     --jq '.[] | [.sha, (.commit.message | split("\n")[0])] | @tsv')
+
+          if [[ $failed -ne 0 ]]; then
+            echo "See https://www.conventionalcommits.org/ and .github/copilot-instructions.md"
+            exit 1
+          fi
+          echo "PR title and all commits follow Conventional Commits."
