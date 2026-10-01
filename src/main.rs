@@ -68,6 +68,8 @@ struct View {
     cell: i32,
     gap: i32,
     pad: i32,
+    /// Cells stack top-to-bottom on left/right docked taskbars.
+    vertical: bool,
     scale: f32,
     current: usize,
     dots: Vec<bool>,
@@ -76,16 +78,26 @@ struct View {
 }
 
 impl View {
+    fn cell_rect(&self, i: usize) -> RECT {
+        let off = self.pad + i as i32 * (self.cell + self.gap);
+        let (x0, y0) = if self.vertical {
+            (self.pad, off)
+        } else {
+            (off, self.pad)
+        };
+        RECT {
+            left: x0,
+            top: y0,
+            right: x0 + self.cell,
+            bottom: y0 + self.cell,
+        }
+    }
+
     fn hit(&self, x: i32, y: i32) -> Option<usize> {
-        if y < self.pad || y >= self.pad + self.cell {
-            return None;
-        }
-        let rel = x - self.pad;
-        if rel < 0 {
-            return None;
-        }
-        let i = (rel / (self.cell + self.gap)) as usize;
-        (i < self.dots.len() && rel % (self.cell + self.gap) < self.cell).then_some(i)
+        (0..self.dots.len()).find(|&i| {
+            let r = self.cell_rect(i);
+            x >= r.left && x < r.right && y >= r.top && y < r.bottom
+        })
     }
 }
 
@@ -214,6 +226,7 @@ impl App {
             cell: 0,
             gap: 0,
             pad: 0,
+            vertical: false,
             scale: 1.0,
             current: self.desktops.current,
             dots: dots.to_vec(),
@@ -230,24 +243,42 @@ impl App {
         let s = dpi as f32 / 96.0;
         v.scale = s;
         let (tw, th) = (r.right - r.left, r.bottom - r.top);
+        v.vertical = th > tw;
+        // Thickness of the taskbar across its short axis bounds the cell size.
+        let thickness = if v.vertical { tw } else { th };
         v.pad = (4.0 * s).round() as i32;
         v.cell = ((26.0 * s).round() as i32)
-            .min(th - v.pad * 2)
+            .min(thickness - v.pad * 2)
             .max((16.0 * s) as i32);
         v.gap = (4.0 * s).round() as i32;
-        v.w = v.pad * 2 + n as i32 * v.cell + (n as i32 - 1) * v.gap;
-        v.h = v.cell + v.pad * 2;
-        let left = match self.settings.placement {
+        let length = v.pad * 2 + n as i32 * v.cell + (n as i32 - 1) * v.gap;
+        let breadth = v.cell + v.pad * 2;
+        // "Left" means the start of the taskbar: left edge when horizontal, top edge when vertical.
+        let start = match self.settings.placement {
             Placement::Left => true,
             Placement::Center => false,
             Placement::Auto => config::taskbar_alignment() != 0,
         };
-        v.x = if left {
-            r.left + (12.0 * s).round() as i32
+        let margin = (12.0 * s).round() as i32;
+        if v.vertical {
+            v.w = breadth;
+            v.h = length;
+            v.x = r.left + (tw - v.w) / 2;
+            v.y = if start {
+                r.top + margin
+            } else {
+                r.top + (th - v.h) / 2
+            };
         } else {
-            r.left + (tw - v.w) / 2
-        };
-        v.y = r.top + (th - v.h) / 2;
+            v.w = length;
+            v.h = breadth;
+            v.x = if start {
+                r.left + margin
+            } else {
+                r.left + (tw - v.w) / 2
+            };
+            v.y = r.top + (th - v.h) / 2;
+        }
         v.visible = !fullscreen_app_active(tb);
         v
     }
@@ -261,13 +292,7 @@ impl App {
         let mut labels = Vec::with_capacity(n);
         let mut rects = Vec::with_capacity(n);
         for i in 0..n {
-            let x0 = v.pad + i as i32 * (v.cell + v.gap);
-            let rect = RECT {
-                left: x0,
-                top: v.pad,
-                right: x0 + v.cell,
-                bottom: v.pad + v.cell,
-            };
+            let rect = v.cell_rect(i);
             let fill = if i == v.current {
                 t.current
             } else if v.hover == Some(i) {
@@ -538,7 +563,7 @@ fn show_menu() {
                 Placement::Auto,
                 w!("Automatic (opposite taskbar icons)"),
             ),
-            (CMD_PLACE_LEFT, Placement::Left, w!("Left")),
+            (CMD_PLACE_LEFT, Placement::Left, w!("Start (left / top)")),
             (CMD_PLACE_CENTER, Placement::Center, w!("Centre")),
         ] {
             let _ = AppendMenuW(place, MF_STRING | check(settings.placement == p), id, label);
@@ -788,5 +813,48 @@ fn main() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view(vertical: bool) -> View {
+        View {
+            visible: true,
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 0,
+            cell: 20,
+            gap: 4,
+            pad: 4,
+            vertical,
+            scale: 1.0,
+            current: 0,
+            dots: vec![false; 3],
+            hover: None,
+            theme: Theme::load(),
+        }
+    }
+
+    #[test]
+    fn horizontal_layout_hits_along_x() {
+        let v = view(false);
+        assert_eq!(v.cell_rect(1).left, 28);
+        assert_eq!(v.cell_rect(1).top, 4);
+        assert_eq!(v.hit(30, 10), Some(1));
+        assert_eq!(v.hit(26, 10), None); // gap
+        assert_eq!(v.hit(10, 30), None);
+    }
+
+    #[test]
+    fn vertical_layout_hits_along_y() {
+        let v = view(true);
+        assert_eq!(v.cell_rect(2).top, 52);
+        assert_eq!(v.cell_rect(2).left, 4);
+        assert_eq!(v.hit(10, 55), Some(2));
+        assert_eq!(v.hit(55, 10), None);
     }
 }
